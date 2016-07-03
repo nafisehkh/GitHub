@@ -34,6 +34,32 @@ testset <- training[-inTrain,]
 
 #Prediction with adaboost bagging method (adabag)
 adabagmod <- train(classe ~., data=trainset, method="AdaBag")
+
+Bagged AdaBoost 
+
+12530 samples
+   52 predictor
+    5 classes: 'A', 'B', 'C', 'D', 'E' 
+
+No pre-processing
+Resampling: Bootstrapped (25 reps) 
+Summary of sample sizes: 12529, 12529, 12529, 12529, 12529, 12529, ... 
+Resampling results across tuning parameters:
+
+  maxdepth  mfinal  Accuracy   Kappa      
+  1          50     0.3104988  0.004028766
+  1         100     0.3116029  0.000000000
+  1         150     0.3116029  0.000000000
+  2          50     0.3515365  0.075890243
+  2         100     0.3517449  0.076056194
+  2         150     0.3517707  0.076097586
+  3          50     0.4190474  0.191597124
+  3         100     0.4209664  0.191244643
+  3         150     0.4193971  0.191983693
+
+Accuracy was used to select the optimal model using  the largest value.
+The final values used for the model were mfinal = 100 and maxdepth = 3.
+
 predadabag <- predict(adabagmod, testset)
 confusionMatrix(predadabag, testset$classe)
 confadabag <- confusionMatrix(predadabag, testset$classe)
@@ -73,11 +99,122 @@ Balanced Accuracy      0.6136  0.63204   0.5000   0.5000  0.71631
 
 #prediction with Gradient Boosting Method (gbm)
 gbmmod <- train(classe ~., method ="gbm", data = trainset, verbose=FALSE)
+
+Stochastic Gradient Boosting 
+
+12530 samples
+   52 predictor
+    5 classes: 'A', 'B', 'C', 'D', 'E' 
+
+No pre-processing
+Resampling: Bootstrapped (25 reps) 
+Summary of sample sizes: 12529, 12529, 12529, 12529, 12529, 12529, ... 
+Resampling results across tuning parameters:
+
+  interaction.depth  n.trees  Accuracy   Kappa    
+  1                   50      0.7532659  0.6808186
+  1                  100      0.8203460  0.7683423
+  1                  150      0.8556903  0.8139845
+  2                   50      0.8533678  0.8106866
+  2                  100      0.9073156  0.8805935
+  2                  150      0.9326568  0.9132863
+  3                   50      0.8976396  0.8680480
+  3                  100      0.9418516  0.9251375
+  3                  150      0.9592952  0.9476265
+
+Tuning parameter 'shrinkage' was held constant at a value of 0.1
+
+Tuning parameter 'n.minobsinnode' was held constant at a value of 10
+Accuracy was used to select the optimal model using  the largest value.
+The final values used for the model were n.trees = 150,
+ interaction.depth = 3, shrinkage = 0.1 and n.minobsinnode = 10. 
+
 predgbm <- predict(gbmmod, testset)
 confgbm <- confusionMatrix(predgbm,testset$classe)
 
+Confusion Matrix and Statistics
+
+          Reference
+Prediction    A    B    C    D    E
+         A 1661   33    0    0    1
+         B    5 1080   32    4    3
+         C    4   20  985   19    4
+         D    4    4    9  938    6
+         E    0    2    0    3  550
+
+Overall Statistics
+                                          
+               Accuracy : 0.9715          
+                 95% CI : (0.9667, 0.9758)
+    No Information Rate : 0.3119          
+    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+                  Kappa : 0.9633          
+ Mcnemar's Test P-Value : 1.052e-05       
+
+Statistics by Class:
+
+                     Class: A Class: B Class: C Class: D Class: E
+Sensitivity            0.9922   0.9482   0.9600   0.9730   0.9752
+Specificity            0.9908   0.9896   0.9892   0.9948   0.9990
+Pos Pred Value         0.9799   0.9609   0.9545   0.9761   0.9910
+Neg Pred Value         0.9965   0.9861   0.9905   0.9941   0.9971
+Prevalence             0.3119   0.2122   0.1912   0.1796   0.1051
+Detection Rate         0.3095   0.2012   0.1835   0.1748   0.1025
+Detection Prevalence   0.3158   0.2094   0.1923   0.1791   0.1034
+Balanced Accuracy      0.9915   0.9689   0.9746   0.9839   0.9871
+
 #prediction with recursive partitioning and regresssion trees (rpart) method
 rpartmod <- rpart(classe~., data=trainset)
+
+n=12529 (1 observation deleted due to missingness)
+
+node), split, n, loss, yval, (yprob)
+      * denotes terminal node
+
+   1) root 12529 8623 A (0.31 0.21 0.19 0.18 0.11)  
+     2) pitch_forearm< -34.35 1084    4 A (1 0.0037 0 0 0) *
+     3) pitch_forearm>=-34.35 11445 8619 A (0.25 0.23 0.21 0.2 0.12)  
+       6) roll_belt< 130.5 10917 8101 A (0.26 0.24 0.22 0.21 0.073)  
+        12) magnet_dumbbell_y< 436.5 9226 6470 A (0.3 0.19 0.25 0.2 0.063)  
+          24) roll_forearm< 123.5 5871 3413 A (0.42 0.18 0.19 0.17 0.042)  
+            48) magnet_dumbbell_z< -24.5 2096  698 A (0.67 0.21 0.018 0.077 0.03)  
+              96) roll_forearm>=-136.5 1743  379 A (0.78 0.17 0.019 0.025 0.0063) *
+              97) roll_forearm< -136.5 353  208 B (0.096 0.41 0.011 0.33 0.15) *
+            49) magnet_dumbbell_z>=-24.5 3775 2715 A (0.28 0.17 0.28 0.22 0.049)  
+              98) yaw_belt>=168.5 526   70 A (0.87 0.07 0 0.063 0) *
+              99) yaw_belt< 168.5 3249 2193 C (0.19 0.19 0.33 0.24 0.057)  
+               198) pitch_belt< -43.15 307   36 B (0.013 0.88 0.075 0.02 0.0098) *
+               199) pitch_belt>=-43.15 2942 1909 C (0.2 0.11 0.35 0.27 0.062)  
+                 398) accel_dumbbell_y>=-40.5 2503 1730 D (0.24 0.13 0.26 0.31 0.066)  
+                   796) roll_belt>=125.5 639  250 C (0.34 0.033 0.61 0.014 0.0047)  
+                    1592) magnet_belt_z< -323.5 195    8 A (0.96 0 0.026 0 0.015) *
+                    1593) magnet_belt_z>=-323.5 444   60 C (0.068 0.047 0.86 0.02 0) *
+                   797) roll_belt< 125.5 1864 1100 D (0.2 0.16 0.14 0.41 0.086)  
+                    1594) yaw_belt< -87.55 925  667 A (0.28 0.28 0.15 0.2 0.09)  
+                      3188) yaw_belt>=-93.15 738  487 B (0.33 0.34 0.18 0.064 0.087)  
+                        6376) magnet_forearm_z>=-53.5 358  139 A (0.61 0.19 0.075 0.045 0.081) *
+                        6377) magnet_forearm_z< -53.5 380  196 B (0.061 0.48 0.28 0.082 0.092) *
+                      3189) yaw_belt< -93.15 187   50 D (0.086 0.032 0.048 0.73 0.1) *
+                    1595) yaw_belt>=-87.55 939  359 D (0.13 0.039 0.13 0.62 0.083)  
+                      3190) yaw_arm< -116.5 97    0 A (1 0 0 0 0) *
+                      3191) yaw_arm>=-116.5 842  262 D (0.027 0.044 0.15 0.69 0.093) *
+                 399) accel_dumbbell_y< -40.5 439   62 C (0.011 0.05 0.86 0.036 0.043) *
+          25) roll_forearm>=123.5 3355 2130 C (0.089 0.19 0.37 0.25 0.1)  
+            50) magnet_dumbbell_y< 290.5 2050  998 C (0.1 0.14 0.51 0.16 0.087)  
+             100) magnet_dumbbell_z>=286.5 303  141 A (0.53 0.14 0.056 0.086 0.18) *
+             101) magnet_dumbbell_z< 286.5 1747  712 C (0.026 0.14 0.59 0.17 0.071) *
+            51) magnet_dumbbell_y>=290.5 1305  783 D (0.07 0.28 0.13 0.4 0.12)  
+             102) pitch_forearm< 24.05 789  469 B (0.063 0.41 0.18 0.17 0.18) *
+             103) pitch_forearm>=24.05 516  132 D (0.079 0.081 0.062 0.74 0.033) *
+        13) magnet_dumbbell_y>=436.5 1691  768 B (0.035 0.55 0.046 0.25 0.13)  
+          26) total_accel_dumbbell>=5.5 1169  323 B (0.051 0.72 0.066 0.023 0.14)  
+            52) roll_belt>=-0.59 1073  227 B (0.056 0.79 0.072 0.025 0.059) *
+            53) roll_belt< -0.59 96    0 E (0 0 0 0 1) *
+          27) total_accel_dumbbell< 5.5 522  133 D (0 0.15 0.0019 0.75 0.11) *
+       7) roll_belt>=130.5 528   10 E (0.019 0 0 0 0.98) *
+       
+       
 rpart.plot(rpartmod, extra = 100)
 predrpart <- predict(rpartmod, testset, type="class")
 confrpart <- confusionMatrix(predrpart, testset$classe)
@@ -87,6 +224,38 @@ confrpart <- confusionMatrix(predrpart, testset$classe)
 rfmod <- randomForest(classe ~., data=trainset, method="class")
 predrf <- predict(rfmod, testset, type="class")
 confrf <- confusionMatrix(predrf, testset$classe)
+
+Confusion Matrix and Statistics
+
+          Reference
+Prediction    A    B    C    D    E
+         A 1514  205   37   68   52
+         B   81  743  161  151  117
+         C   40  122  761  117   47
+         D   35   69   67  628   63
+         E    4    0    0    0  285
+
+Overall Statistics
+                                          
+               Accuracy : 0.7324          
+                 95% CI : (0.7204, 0.7442)
+    No Information Rate : 0.3119          
+    P-Value [Acc > NIR] : < 2.2e-16       
+                                          
+                  Kappa : 0.6517          
+ Mcnemar's Test P-Value : < 2.2e-16       
+
+Statistics by Class:
+
+                     Class: A Class: B Class: C Class: D Class: E
+Sensitivity            0.9044   0.6523   0.7417   0.6515  0.50532
+Specificity            0.9020   0.8794   0.9249   0.9469  0.99917
+Pos Pred Value         0.8070   0.5930   0.7001   0.7285  0.98616
+Neg Pred Value         0.9542   0.9037   0.9381   0.9254  0.94506
+Prevalence             0.3119   0.2122   0.1912   0.1796  0.10509
+Detection Rate         0.2821   0.1384   0.1418   0.1170  0.05310
+Detection Prevalence   0.3495   0.2335   0.2025   0.1606  0.05385
+Balanced Accuracy      0.9032   0.7659   0.8333   0.7992  0.75224
 
 #creating a table to compare accuracies
 method <- c("rpart", "rf", "adabag","gbm")
