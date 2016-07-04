@@ -1,0 +1,118 @@
+---
+title: "final_project"
+author: "Nafiseh Khoram"
+date: "July 3, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+##loading required libraries
+```{r}
+library(caret);library(ggplot2);library(lattice);library(rpart);library(rpart.plot);library(survival);library(parallel)
+library(splines);library(gbm);library(randomForest);library(plyr);library(adabag);library(mlbench)
+```
+
+##Reading the training and testing urls
+```{r}
+trainingurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testingurl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+```
+
+##Reading the csv files and treating the missing values
+```{r}
+training <- read.csv(trainingurl, na.strings=c("NA","#DIV/0!",""))
+testing <- read.csv(testingurl, na.strings=c("NA","#DIV/0!",""))
+```
+
+##Removing variables with zero variances
+```{r}
+zerovar <- nearZeroVar(training, saveMetrics=TRUE)
+training <- training[,!zerovar$nzv]
+```
+
+##Removing unused variable, columns 1 to 6 contain username and timestamps
+```{r}
+training <- training[,-c(1:6)]
+```
+
+##Removing columns that are mostly NAs
+```{r}
+is.data <- (apply(!is.na(training),2,sum)>= .7*nrow(training))
+training <- training[,is.data]
+```
+
+##partitioning the data into training and testing parts
+```{r}
+set.seed(1234)
+inTrain <- createDataPartition(training$classe, p =.7, list=FALSE)
+trainset <- training[inTrain,]
+testset <- training[-inTrain,]
+```
+
+##Prediction with adaboost bagging method (adabag)
+```{r}
+adabagmod <- train(classe ~., data=trainset, method="AdaBag")
+adabagmod
+```
+```{r}
+predadabag <- predict(adabagmod, testset)
+confusionMatrix(predadabag, testset$classe)
+confadabag <- confusionMatrix(predadabag, testset$classe)
+confadabag
+```
+
+##prediction with Gradient Boosting Method (gbm)
+```{r}
+gbmmod <- train(classe ~., method ="gbm", data = trainset, verbose=FALSE)
+gbmmod
+```
+
+```{r}
+predgbm <- predict(gbmmod, testset)
+confgbm <- confusionMatrix(predgbm,testset$classe)
+confgbm
+```
+
+
+##prediction with recursive partitioning and regresssion trees (rpart) method
+
+```{r}
+rpartmod <- rpart(classe~., data=trainset)
+```
+
+
+```{r}
+rpart.plot(rpartmod, extra = 100)
+```
+##![](C:\Users\User\Desktop\Coursera\Machine_Learning\Rplot.png)
+
+```{r}
+predrpart <- predict(rpartmod, testset, type="class")
+confrpart <- confusionMatrix(predrpart, testset$classe)
+confrpart
+```
+
+##prediction using randomForest (rf)
+```{r}
+rfmod <- randomForest(classe ~., data=trainset, method="class")
+predrf <- predict(rfmod, testset, type="class")
+confrf <- confusionMatrix(predrf, testset$classe)
+confrf
+```
+
+#creating a table to compare accuracies
+``` {r}
+method <- c("rpart", "rf", "adabag","gbm")
+accuracy <- c(confrpart$overall[1],confrf$overall[1],confadabag$overall[1],confgbm$overall[1])
+accuracytable <- data.frame(method,accuracy)
+accuracytable
+```
+
+#making the final prediction with rf, since it has the highest accuracy
+```{r}
+predfinal <- predict(rfmod, testing, type="class")
+predfinal
+```
+
