@@ -1,0 +1,378 @@
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader
+import os
+import matplotlib.pyplot as plt
+import numpy as np
+import csv
+import time
+from torchvision import datasets, transforms
+from torchvision.utils import make_grid
+import math
+import torch.nn.functional as F
+
+# Set device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
+# Hyperparameters
+batch_size = 32
+learning_rate = 0.001
+num_epochs = 1
+viz_interval = 50
+save_interval = 5
+print_interval = 25
+sample_frac = 0.5
+out_dir = "./cifar10_reconstruction"
+
+# Create output directories
+os.makedirs(out_dir, exist_ok=True)
+os.makedirs(os.path.join(out_dir, "models"), exist_ok=True)
+os.makedirs(os.path.join(out_dir, "visualizations"), exist_ok=True)
+
+# Utility functions
+def create_frequency_mask(image_size, sample_frac=0.5):
+    """Create a frequency domain sampling mask"""
+    H, W = image_size
+    mask = torch.ones(H, W)
+
+    center_y, center_x = H // 2, W // 2
+    y, x = torch.meshgrid(torch.arange(H), torch.arange(W), indexing='ij')
+    dist = torch.sqrt((x - center_x)**2 + (y - center_y)**2)
+
+    max_radius = min(H, W) // 2
+    keep_radius = int(max_radius * sample_frac)
+    mask[dist > keep_radius] = 0
+
+    random_mask = torch.rand(H, W) < sample_frac
+    mask = mask * random_mask.float()
+
+    return mask
+
+def image_to_frequency(image):
+    """Convert image to frequency domain"""
+    # Convert to grayscale
+    if image.dim() == 3 and image.size(0) == 3:
+        gray = image.mean(dim=0, keepdim=True)
+    else:
+        gray = image
+
+    # Ensure we have [1, H, W] shape
+    if gray.dim() == 2:
+        gray = gray.unsqueeze(0)
+
+    # FFT
+    kspace = torch.fft.fftshift(torch.fft.fft2(gray))
+    kspace_real = kspace.real
+    kspace_imag = kspace.imag
+
+    # Return as [2, H, W] - real and imaginary as separate channels
+    return torch.stack([kspace_real.squeeze(0), kspace_imag.squeeze(0)], dim=0)
+
+# Rotational Equivariant Layers (Pure PyTorch implementation)
+class RConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
+                 bias=True, num_rotations=8, mode=2):
+        super(RConv2d, self).__init__()
+
+        self.in_channels = in_channels
+        self.out_channels = out_channels
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+        self.num_rotations = num_rotations
+
+        # Learnable kernel parameters
+        self.weight = nn.Parameter(
+            torch.randn(out_channels, in_channels, kernel_size, kernel_size) * 0.1
+        )
+
+        if bias:
+            self.bias = nn.Parameter(torch.zeros(out_channels))
+        else:
+            self.register_parameter('bias', None)
+
+        # Precompute rotation matrices
+        self.register_buffer('rotation_matrices',
+                            self._create_rotation_matrices(num_rotations, kernel_size))
+
+    def _create_rotation_matrices(self, num_rotations, kernel_size):
+        """Create rotation transformation matrices"""
+        matrices = []
+        center = (kernel_size - 1) / 2.0
+
+        for i in range(num_rotations):
+            angle = i * (360.0 / num_rotations)
+            theta = torch.tensor([
+                [math.cos(math.radians(angle)), -math.sin(math.radians(angle)), 0],
+                [math.sin(math.radians(angle)), math.cos(math.radians(angle)), 0]
+            ], dtype=torch.float32)
+
+            # Create affine grid for rotation
+            grid = F.affine_grid(theta.unsqueeze(0),
+                                [1, 1, kernel_size, kernel_size],
+                                align_corners=False)
+            matrices.append(grid)
+
+        return torch.stack(matrices)
+
+    def _rotate_kernel(self, kernel, rotation_idx):
+        """Rotate kernel using precomputed grid"""
+        grid = self.rotation_matrices[rotation_idx]
+        rotated_kernel = F.grid_sample(kernel.unsqueeze(0), grid,
+                                     align_corners=False, padding_mode='zeros')
+        return rotated_kernel.squeeze(0)
+
+    def forward(self, x):
+        """
+        Forward pass with rotational equivariance
+        """
+        batch_size = x.size(0)
+
+        # Apply convolution with all rotated versions of the kernel
+        outputs = []
+
+        for rot_idx in range(self.num_rotations):
+            # Rotate the kernel
+            rotated_weight = self._rotate_kernel(self.weight, rot_idx)
+
+            # Apply convolution with rotated kernel
+            conv_output = F.conv2d(x, rotated_weight, bias=None,
+                                 stride=self.stride, padding=self.padding)
+            outputs.append(conv_output)
+
+        # Average the outputs from all rotations (equivariant operation)
+        output = torch.stack(outputs, dim=1).mean(dim=1)
+
+        # Add bias if specified
+        if self.bias is not None:
+            output = output + self.bias.view(1, -1, 1, 1)
+
+        return output
+
+class VectorBatchNorm(nn.Module):
+    def __init__(self, num_features):
+        super(VectorBatchNorm, self).__init__()
+        self.bn = nn.BatchNorm2d(num_features)
+
+    def forward(self, x):
+        return self.bn(x)
+
+class Vector2Magnitude(nn.Module):
+    def __init__(self):
+        super(Vector2Magnitude, self).__init__()
+
+    def forward(self, x):
+        # For our implementation, we'll assume the input is already in the right format
+        if x.size(1) % 2 == 0:  # Even number of channels (likely vector field)
+            batch, channels, h, w = x.shape
+            half_channels = channels // 2
+            real_part = x[:, :half_channels, :, :]
+            imag_part = x[:, half_channels:, :, :]
+            magnitude = torch.sqrt(real_part**2 + imag_part**2)
+            return magnitude
+        else:
+            return x  # Already scalar field
+
+# SIMPLIFIED Rotational Equivariant UNet Model (without skip connections)
+class RotEquivariantUNet(nn.Module):
+    def __init__(self, in_channels=2, out_channels=1):
+        super(RotEquivariantUNet, self).__init__()
+
+        # Encoder with rotational equivariant layers
+        self.enc1 = self._rot_block(in_channels, 32, mode=1)
+        self.enc2 = self._rot_block(32, 64, mode=2)
+        self.enc3 = self._rot_block(64, 128, mode=2)
+
+        # Decoder (simplified without skip connections to avoid dimension issues)
+        self.dec1 = self._rot_block(128, 64, mode=2)
+        self.dec2 = self._rot_block(64, 32, mode=2)
+
+        # Final conversion to scalar field
+        self.vector_to_scalar = Vector2Magnitude()
+        self.final_conv = nn.Conv2d(32, out_channels, kernel_size=1)
+
+        self.pool = nn.MaxPool2d(2)
+        self.upsample = nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True)
+
+    def _rot_block(self, in_channels, out_channels, mode=2):
+        return nn.Sequential(
+            RConv2d(in_channels, out_channels, 3, padding=1, num_rotations=4),
+            VectorBatchNorm(out_channels),
+            nn.ReLU(inplace=True),
+            RConv2d(out_channels, out_channels, 3, padding=1, num_rotations=4),
+            VectorBatchNorm(out_channels),
+            nn.ReLU(inplace=True)
+        )
+
+    def forward(self, x):
+        # Encoder
+        e1 = self.enc1(x)        # [B, 32, 32, 32]
+        e2 = self.enc2(self.pool(e1))  # [B, 64, 16, 16]
+        e3 = self.enc3(self.pool(e2))  # [B, 128, 8, 8]
+
+        # Decoder (simplified without skip connections)
+        d1 = self.dec1(self.upsample(e3))  # [B, 64, 16, 16]
+        d2 = self.dec2(self.upsample(d1))  # [B, 32, 32, 32]
+
+        # Convert vector field to scalar and final convolution
+        scalar = self.vector_to_scalar(d2)
+        output = self.final_conv(scalar)
+
+        return output
+
+# CIFAR-10 Dataset
+class CIFAR10FrequencyDataset(Dataset):
+    def __init__(self, train=True, sample_frac=0.5):
+        self.train = train
+        self.sample_frac = sample_frac
+
+        transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
+        ])
+
+        self.dataset = datasets.CIFAR10(
+            root='./data',
+            train=train,
+            download=True,
+            transform=transform
+        )
+
+        self.mask = create_frequency_mask((32, 32), sample_frac)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        image, label = self.dataset[idx]
+
+        # Convert to frequency domain
+        kspace = image_to_frequency(image)
+
+        # Apply sampling mask
+        masked_kspace = kspace * self.mask.unsqueeze(0)
+
+        # Target is grayscale version with same size as input
+        target = image.mean(dim=0, keepdim=True)  # [1, 32, 32]
+
+        return masked_kspace, target
+
+# Visualization
+def visualize_results(original, reconstructed, title, save_path=None):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 5))
+
+    axes[0].imshow(original[0].cpu().numpy(), cmap='gray')
+    axes[0].set_title('Original')
+    axes[0].axis('off')
+
+    axes[1].imshow(reconstructed[0].cpu().numpy(), cmap='gray')
+    axes[1].set_title('Reconstructed')
+    axes[1].axis('off')
+
+    fig.suptitle(title)
+    plt.tight_layout()
+
+    if save_path:
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+
+    plt.show()
+
+# Create datasets
+print("Creating datasets...")
+train_dataset = CIFAR10FrequencyDataset(train=True, sample_frac=sample_frac)
+test_dataset = CIFAR10FrequencyDataset(train=False, sample_frac=sample_frac)
+
+# Debug: Check shapes
+sample_kspace, sample_target = train_dataset[0]
+print(f"Sample kspace shape: {sample_kspace.shape}")
+print(f"Sample target shape: {sample_target.shape}")
+
+# DataLoaders
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, pin_memory=True)
+test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False, pin_memory=True)
+
+# Use the rotational equivariant model
+model = RotEquivariantUNet(in_channels=2, out_channels=1).to(device)
+
+# Test the model with a single batch first
+print("Testing model with sample batch...")
+test_batch = next(iter(train_loader))
+test_input, test_target = test_batch
+test_input = test_input.to(device)
+test_target = test_target.to(device)
+
+model.eval()
+with torch.no_grad():
+    test_output = model(test_input)
+    print(f"Test input shape: {test_input.shape}")
+    print(f"Test output shape: {test_output.shape}")
+    print(f"Test target shape: {test_target.shape}")
+
+# Only proceed if shapes match
+if test_output.shape == test_target.shape:
+    print("Shapes match! Starting training...")
+
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Training
+    model.train()
+    start_time = time.time()
+
+    for epoch in range(num_epochs):
+        running_loss = 0.0
+
+        for batch_idx, (input_kspace, target) in enumerate(train_loader):
+            # Move to device
+            input_kspace = input_kspace.to(device)
+            target = target.to(device)
+
+            # Forward pass
+            optimizer.zero_grad()
+            output = model(input_kspace)
+            loss = criterion(output, target)
+
+            # Backward pass
+            loss.backward()
+            optimizer.step()
+
+            running_loss += loss.item()
+
+            if batch_idx % print_interval == 0:
+                print(f"Epoch [{epoch+1}/{num_epochs}], Batch [{batch_idx}/{len(train_loader)}], Loss: {loss.item():.6f}")
+
+        avg_loss = running_loss / len(train_loader)
+        print(f"Epoch [{epoch+1}/{num_epochs}], Average Loss: {avg_loss:.6f}")
+
+    print(f"Training completed in {(time.time()-start_time)/60:.2f} minutes")
+
+    # Final test
+    model.eval()
+    with torch.no_grad():
+        test_input, test_target = next(iter(test_loader))
+        test_input = test_input.to(device)
+        test_output = model(test_input)
+
+        print(f"Final test - Input: {test_input.shape}, Output: {test_output.shape}, Target: {test_target.shape}")
+        visualize_results(test_target[0].cpu(), test_output[0].cpu(), "Final Test Results")
+
+else:
+    print(f"Shape mismatch! Output: {test_output.shape}, Target: {test_target.shape}")
+    print("Debugging model architecture...")
+
+    # Debug each layer
+    print("\nModel architecture:")
+    print(model)
+
+    # Manual forward pass to see where dimensions change
+    print("\nManual forward pass debugging:")
+    x = test_input
+    print(f"Input: {x.shape}")
+
+    # Manually go through each layer to see shape changes
+    for name, module in model.named_children():
+        if name not in ['vector_to_scalar', 'final_conv']:  # Skip these for now
+            x = module(x)
+            print(f"After {name}: {x.shape}")
